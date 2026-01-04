@@ -1,10 +1,8 @@
 import asyncio
-import logging
 import os
 from dotenv import load_dotenv
 
 from semantic_kernel import Kernel
-from semantic_kernel.utils.logging import setup_logging
 from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
 from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
 from semantic_kernel.connectors.ai.chat_completion_client_base import ChatCompletionClientBase
@@ -14,6 +12,7 @@ from semantic_kernel.connectors.ai.open_ai.prompt_execution_settings.open_ai_pro
     OpenAIChatPromptExecutionSettings,
 )
 
+from plugins.insurance_position_plugin import insurance_position_plugin
 from plugins.conditions_plugin import conditions_plugin
 
 load_dotenv()
@@ -27,6 +26,7 @@ async def main():
     )
     kernel.add_service(chat_completion)
     kernel.add_plugin(conditions_plugin(), plugin_name="conditions_analyzer")
+    kernel.add_plugin(insurance_position_plugin(), plugin_name="insurance_position_handler")
 
     execution_settings = OpenAIChatPromptExecutionSettings()
     execution_settings.function_choice_behavior = FunctionChoiceBehavior.Auto()
