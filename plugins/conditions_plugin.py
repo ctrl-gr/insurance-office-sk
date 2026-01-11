@@ -1,5 +1,6 @@
 from typing import Annotated, List
 from semantic_kernel.functions import kernel_function
+from pymongo import MongoClient
 import PyPDF2
 import os
 
@@ -9,6 +10,31 @@ class conditions_plugin:
         self.pdf_filename = ""
         self.loaded = False
         self.chunk_size = 1000
+        self.client = None
+        self.db = None
+        self.conditions_collection = None
+        self.connected = False
+    
+    def _connect(self):
+        """Internal method to establish database connection."""
+        if self.connected:
+            return True
+        
+        try:
+            connection_string = os.getenv("MONGODB_CONNECTION_STRING")
+            if not connection_string:
+                return False
+            
+            self.client = MongoClient(connection_string)
+            self.client.admin.command('ping')
+            
+            self.db = self.client[os.getenv("DB_NAME")]
+            self.conditions_collection = self.db["policy_conditions"]
+            self.connected = True
+            return True
+        except Exception as e:
+            self.connected = False
+            return False
     
     def _chunk_text(self, text: str) -> List[dict]:
         """Split text into overlapping chunks for better context."""
@@ -39,19 +65,32 @@ class conditions_plugin:
         return chunks
     
     @kernel_function(
-        name="load_pdf",
-        description="Loads a PDF file and splits it into searchable chunks. Use this before answering questions about a PDF document.",
+        name="load_conditions_by_category",
+        description="Loads insurance policy conditions PDF from storage based on the policy category (e.g., Auto, Casa, Infortuni). Retrieves the document from database storage and prepares it for analysis.",
     )
-    def load_pdf(
+    def load_conditions_by_category(
         self,
-        file_path: Annotated[str, "The path to the PDF file to load"],
+        category: Annotated[str, "The insurance policy category (e.g., Car, Injuries, Home)"],
     ) -> str:
-        """Loads and chunks a PDF file for efficient searching."""
+        """Loads conditions PDF from database storage by category."""
+        if not self._connect():
+            return "Error: Cannot connect to database. Please check your MongoDB connection string."
+        
         try:
-            if not os.path.exists(file_path):
-                return f"Error: PDF file not found at {file_path}"
+            result = self.conditions_collection.find_one({
+                "category": {"$regex": f"^{category}$", "$options": "i"}
+            })
             
-            with open(file_path, 'rb') as file:
+            if not result:
+                return f"No conditions found for category '{category}'. Available categories can be checked in the database."
+            
+            storage_url = result.get("storage_url")
+            conditions_name = result.get("name_conditions", "Unknown")
+            
+            if not storage_url or not os.path.exists(storage_url):
+                return f"Conditions '{conditions_name}' found but PDF file not accessible at: {storage_url}"
+            
+            with open(storage_url, 'rb') as file:
                 pdf_reader = PyPDF2.PdfReader(file)
                 num_pages = len(pdf_reader.pages)
                 
@@ -63,13 +102,13 @@ class conditions_plugin:
                 
                 combined_text = "\n".join(full_text)
                 self.pdf_chunks = self._chunk_text(combined_text)
-                self.pdf_filename = os.path.basename(file_path)
+                self.pdf_filename = conditions_name
                 self.loaded = True
                 
-                return f"Successfully loaded PDF: {self.pdf_filename} ({num_pages} pages, {len(self.pdf_chunks)} chunks). Ready for questions!"
+                return f"Successfully loaded conditions: {conditions_name} ({num_pages} pages, {len(self.pdf_chunks)} chunks). Ready for analysis!"
         
         except Exception as e:
-            return f"Error loading PDF: {str(e)}"
+            return f"Error loading conditions: {str(e)}"
     
     @kernel_function(
         name="search_pdf_content",
@@ -81,7 +120,7 @@ class conditions_plugin:
     ) -> str:
         """Searches and returns only relevant chunks from the PDF."""
         if not self.loaded:
-            return "No PDF loaded. Please use load_pdf first."
+            return "No conditions loaded. Please use load_conditions_by_category first to load a policy conditions document."
         
         query_lower = query.lower()
         query_words = set(query_lower.split())
